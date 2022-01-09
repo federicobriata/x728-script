@@ -1,159 +1,130 @@
+#!/bin/bash
+
 #X728 RTC setting up
 sudo sed -i '$ i rtc-ds1307' /etc/modules
+#sudo sed -i '$ i echo ds1307 0x68 > /sys/class/i2c-adapter/i2c-0/new_device' /etc/rc.local
 sudo sed -i '$ i echo ds1307 0x68 > /sys/class/i2c-adapter/i2c-1/new_device' /etc/rc.local
 sudo sed -i '$ i hwclock -s' /etc/rc.local
 sudo sed -i '$ i #Start power management on boot' /etc/rc.local
 
 #x728 Powering on /reboot /full shutdown through hardware
-#!/bin/bash
+echo '#!/bin/bash
+BATCHECK=1  # Var defined to keep system up if battery level is above 25%, var not defined to shutdown on power loss asap
 
-    sudo sed -e '/shutdown/ s/^#*/#/' -i /etc/rc.local
+# Raspberry Pi GPIO
+PLD=6		# PIN 31 IN for AC power loss detection (When PLD Jumper is inserted: High=power loss | Low=Power supply normal)
+SHUTDOWN=5	# PIN 29 IN for power management. aka shutdown pin (the physical button on x728)
+BOOT=12		# PIN 32 OUT for power management, to signal the SBC as running. aka boot pin
+LATCH=13	# PIN 33 OUT for power OFF, to signal we are shutting down. aka button pin. Note that this PIN has been changed on recent x728 revision, so PIN37 is GPIO 26 for x728 v2.0 and above, and PIN33 is GPIO 13 for X728 v1.2/v1.3
+I2CBUS=1	# 0 = /dev/i2c-0 (port I2C0), 1 = /dev/i2c-1 (port I2C1)
 
-    echo '#!/bin/bash
+# Odroid C2 GPIO (with cat /sys/kernel/debug/gpio on armbian buster kernel v4.19 I found mine)
+#PLD=461
+#SHUTDOWN=470
+#BOOT=466
+#LATCH=476
+#I2CBUS=0
 
-SHUTDOWN=5
 REBOOTPULSEMINIMUM=200
 REBOOTPULSEMAXIMUM=600
-echo "$SHUTDOWN" > /sys/class/gpio/export
-echo "in" > /sys/class/gpio/gpio$SHUTDOWN/direction
-BOOT=12
-echo "$BOOT" > /sys/class/gpio/export
-echo "out" > /sys/class/gpio/gpio$BOOT/direction
-echo "1" > /sys/class/gpio/gpio$BOOT/value
 
-echo "X728 Shutting down..."
+retval=""
 
-while [ 1 ]; do
-  shutdownSignal=$(cat /sys/class/gpio/gpio$SHUTDOWN/value)
-  if [ $shutdownSignal = 0 ]; then
-    /bin/sleep 0.2
-  else  
-    pulseStart=$(date +%s%N | cut -b1-13)
-    while [ $shutdownSignal = 1 ]; do
-      /bin/sleep 0.02
-      if [ $(($(date +%s%N | cut -b1-13)-$pulseStart)) -gt $REBOOTPULSEMAXIMUM ]; then
-        echo "X728 Shutting down", SHUTDOWN, ", halting Rpi ..."
-        sudo poweroff
-        exit
-      fi
-      shutdownSignal=$(cat /sys/class/gpio/gpio$SHUTDOWN/value)
-    done
-    if [ $(($(date +%s%N | cut -b1-13)-$pulseStart)) -gt $REBOOTPULSEMINIMUM ]; then 
-      echo "X728 Rebooting", SHUTDOWN, ", recycling Rpi ..."
-      sudo reboot
-      exit
-    fi
-  fi
-done' > /etc/x728pwr.sh
-sudo chmod +x /etc/x728pwr.sh
-sudo sed -i '$ i /etc/x728pwr.sh &' /etc/rc.local 
+I2CGET=/usr/sbin/i2cget
+SYSFS_GPIO_DIR="/sys/class/gpio"
 
+#gpio functions from ups2.sh odroid stuff
+gpio_export() {
+        [ -e "$SYSFS_GPIO_DIR/gpio$1" ] && return 0
+        echo $1 > "$SYSFS_GPIO_DIR/export"
+}
 
-#X728 full shutdown through Software
-#!/bin/bash
+gpio_getvalue() {
+	echo in > "$SYSFS_GPIO_DIR/gpio$1/direction"
+        val=`cat "$SYSFS_GPIO_DIR/gpio$1/value"`
+        retval=$val
+}
 
-    sudo sed -e '/button/ s/^#*/#/' -i /etc/rc.local
+gpio_setvalue() {
+	echo out > "$SYSFS_GPIO_DIR/gpio$1/direction"
+        echo $2 > "$SYSFS_GPIO_DIR/gpio$1/value"
+}
 
-    echo '#!/bin/bash
-
-BUTTON=13
-
-echo "$BUTTON" > /sys/class/gpio/export;
-echo "out" > /sys/class/gpio/gpio$BUTTON/direction
-echo "1" > /sys/class/gpio/gpio$BUTTON/value
-
-SLEEP=${1:-4}
-
-re='^[0-9\.]+$'
-if ! [[ $SLEEP =~ $re ]] ; then
-   echo "error: sleep time not a number" >&2; exit 1
+if [ "$1" == "--off" ]; then
+		gpio_export $LATCH
+		gpio_setvalue $LATCH 1
+		echo "X728 Shutting down..."
 fi
 
-echo "X728 Shutting down..."
-/bin/sleep $SLEEP
+gpio_export $BOOT
+gpio_setvalue $BOOT 1
+gpio_export $PLD
+gpio_export $SHUTDOWN
 
-#restore GPIO 13
-echo "0" > /sys/class/gpio/gpio$BUTTON/value
-' > /usr/local/bin/x728softsd.sh
-sudo chmod +x /usr/local/bin/x728softsd.sh
+while [ 1 ]; do
 
-#X728 Battery voltage & precentage reading
-#!/bin/bash
+	gpio_getvalue $PLD
+	if [ -z ${BATCHECK+x} ];
+	then
+		if [ $retval -eq  1 ];
+		then
+			echo "Power Loss Detected. Power adapter disconnected."
+			echo "X728 Shutting down in a while..."
+			/sbin/shutdown
+			/bin/sleep 60
+		fi
+	else
+		DATA=$(${I2CGET} -f -y "$I2CBUS" 0x36 2 w)
+		RAW=$(printf "%d\n" $(echo "${DATA}" | sed -E "s/0x([a-f0-9]{2})([a-f0-9]{2})/0x\2\1/"))
+		VOLT=$(echo "scale=2; ${RAW}*78.125/1000000" | bc -l)
 
-    sudo sed -e '/shutdown/ s/^#*/#/' -i /etc/rc.local
+		DATA=$(${I2CGET} -f -y "$I2CBUS" 0x36 4 w)
+		RAW=$(printf "%d\n" $(echo "${DATA}" | sed -E "s/0x([a-f0-9]{2})([a-f0-9]{2})/0x\2\1/"))
+		LEVEL=$(echo "scale=2; ${RAW}/256" | bc -l)
 
-    echo '#!/usr/bin/env python
-import struct
-import smbus
-import sys
-import time
+		echo "Battery Voltage: ${VOLT}V"
+		echo "Battery Capacity: ${LEVEL}%"
 
+		if [ $(echo "${LEVEL} < 25" | bc) == 1 ] && [ $retval -eq  1 ];  # if battery level goes under 25%, shutdown gracefull
+		then
+			echo "Low battery. Connect the power adapter immediately"
+			echo "X728 Shutting down in a while..."
+			/sbin/shutdown
+			/bin/sleep 60
+		fi
+	fi
+	echo "Power Input Okay"
 
-def readVoltage(bus):
+	gpio_getvalue $SHUTDOWN
 
-     address = 0x36
-     read = bus.read_word_data(address, 2)
-     swapped = struct.unpack("<H", struct.pack(">H", read))[0]
-     voltage = swapped * 1.25 /1000/16
-     return voltage
+	if [ $retval -eq 1 ];
+	then
+		pulseStart=$(date +%s%N | cut -b1-13)
+		while [ $retval -eq 1 ]; do
+			/bin/sleep 0.02
+			if [ $(($(date +%s%N | cut -b1-13)-$pulseStart)) -gt $REBOOTPULSEMAXIMUM ]; then
+				echo "X728 Shutting down", SHUTDOWN, ", halting the system ..."
+				/sbin/shutdown
+				exit 0
+			fi
+			gpio_getvalue $SHUTDOWN
+		done
+		if [ $(($(date +%s%N | cut -b1-13)-$pulseStart)) -gt $REBOOTPULSEMINIMUM ]; then
+			echo "X728 Rebooting", SHUTDOWN, ", restarting the system ..."
+			/sbin/reboot
+			exit 0
+		fi
+	else
+			/bin/sleep 1
+	fi
 
+done' > /usr/local/bin/x728pwr.sh
+sudo chmod +x /usr/local/bin/x728pwr.sh
+sudo sed -i '$ i /usr/local/bin/x728pwr.sh &' /etc/rc.local
 
-def readCapacity(bus):
+#X728 full shutdown through Software
+echo '#!/bin/bash
 
-     address = 0x36
-     read = bus.read_word_data(address, 4)
-     swapped = struct.unpack("<H", struct.pack(">H", read))[0]
-     capacity = swapped/256
-     return capacity
-
-
-bus = smbus.SMBus(1) # 0 = /dev/i2c-0 (port I2C0), 1 = /dev/i2c-1 (port I2C1)
-
-while True:
-
- print "******************"
- print "Voltage:%5.2fV" % readVoltage(bus)
-
- print "Battery:%5i%%" % readCapacity(bus)
-
- if readCapacity(bus) == 100:
-
-         print "Battery FULL"
-
- if readCapacity(bus) < 20:
-
-
-         print "Battery LOW"
- print "******************"
- time.sleep(2)
-' > /home/pi/x728bat.py
-sudo chmod +x /home/pi/x728bat.py
-
-#X728 AC Power loss / power adapter failture detection
-#!/bin/bash
-
-    sudo sed -e '/button/ s/^#*/#/' -i /etc/rc.local
-
-    echo '#!/usr/bin/env python
-import RPi.GPIO as GPIO
-
-GPIO.setmode(GPIO.BCM)
-GPIO.setup(6, GPIO.IN)
-
-def my_callback(channel):
-    if GPIO.input(6):     # if port 6 == 1
-        print "---AC Power Loss OR Power Adapter Failure---"
-    else:                  # if port 6 != 1
-        print "---AC Power OK,Power Adapter OK---"
-
-GPIO.add_event_detect(6, GPIO.BOTH, callback=my_callback)
-
-print "1.Make sure your power adapter is connected"
-print "2.Disconnect and connect the power adapter to test"
-print "3.When power adapter disconnected, you will see: AC Power Loss or Power Adapter Failure"
-print "4.When power adapter disconnected, you will see: AC Power OK, Power Adapter OK"
-
-raw_input("Testing Started")
-' > /home/pi/x728pld.py
-sudo chmod +x /home/pi/x728pld.py
-
+/usr/local/bin/x728pwr.sh --off
+' > /lib/systemd/system-shutdown/x728softsd.sh
+sudo chmod +x /lib/systemd/system-shutdown/x728softsd.sh
