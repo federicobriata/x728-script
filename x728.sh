@@ -1,11 +1,12 @@
 #!/bin/bash
 
+sudo apt-get install i2c-tools ntpdate
+
 #X728 RTC setting up
 sudo sed -i '$ i rtc-ds1307' /etc/modules
 #sudo sed -i '$ i echo ds1307 0x68 > /sys/class/i2c-adapter/i2c-0/new_device' /etc/rc.local
 sudo sed -i '$ i echo ds1307 0x68 > /sys/class/i2c-adapter/i2c-1/new_device' /etc/rc.local
 sudo sed -i '$ i hwclock -s' /etc/rc.local
-sudo sed -i '$ i #Start power management on boot' /etc/rc.local
 
 #x728 Powering on /reboot /full shutdown through hardware
 echo '#!/bin/bash
@@ -120,7 +121,24 @@ while [ 1 ]; do
 
 done' > /usr/local/bin/x728pwr.sh
 sudo chmod +x /usr/local/bin/x728pwr.sh
-sudo sed -i '$ i /usr/local/bin/x728pwr.sh &' /etc/rc.local
+
+#X728 shutdown systemd service file
+echo '[Unit]
+Description=Start x728 power management
+Requires=local-fs.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/local/bin/x728pwr.sh
+Restart=no
+
+[Install]
+WantedBy=basic.target' > /lib/systemd/system/x728pwr.service
+sudo systemctl enable x728pwr
+#sudo systemctl start x728pwr
+#sudo systemctl status x728pwr
 
 #X728 full shutdown through Software
 echo '#!/bin/bash
