@@ -51,10 +51,17 @@ gpio_setvalue() {
         echo $2 > "$SYSFS_GPIO_DIR/gpio$1/value"
 }
 
-if [ "$1" == "--off" ]; then
+if [ "$1" == "reboot" ]; then
+		gpio_export $LATCH
+		gpio_setvalue $LATCH 1
+		/bin/sleep 4
+		gpio_setvalue $LATCH 0
+		exit 0
+elif [ "$1" == "poweroff" ] || [ "$1" == "halt" ] ; then
 		gpio_export $LATCH
 		gpio_setvalue $LATCH 1
 		echo "X728 Shutting down..."
+		exit 0
 fi
 
 gpio_export $BOOT
@@ -105,7 +112,7 @@ while [ 1 ]; do
 			/bin/sleep 0.02
 			if [ $(($(date +%s%N | cut -b1-13)-$pulseStart)) -gt $REBOOTPULSEMAXIMUM ]; then
 				echo "X728 Shutting down", SHUTDOWN, ", halting the system ..."
-				/sbin/shutdown
+				/sbin/shutdown now
 				exit 0
 			fi
 			gpio_getvalue $SHUTDOWN
@@ -116,7 +123,7 @@ while [ 1 ]; do
 			exit 0
 		fi
 	else
-			/bin/sleep 1
+			/bin/sleep 0.02    # if you need to use the restart block leave this value, I use 2 minutes to reduce CPU usage
 	fi
 
 done' > /usr/local/bin/x728pwr.sh
@@ -143,6 +150,5 @@ sudo systemctl enable x728pwr
 #X728 full shutdown through Software
 echo '#!/bin/bash
 
-/usr/local/bin/x728pwr.sh --off
-' > /lib/systemd/system-shutdown/x728softsd.sh
+/usr/local/bin/x728pwr.sh $1' > /lib/systemd/system-shutdown/x728softsd.sh
 sudo chmod +x /lib/systemd/system-shutdown/x728softsd.sh
