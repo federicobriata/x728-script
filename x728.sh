@@ -13,6 +13,23 @@ sudo sed -i '$ i hwclock -s' /etc/rc.local
 #x728 Powering on /reboot /full shutdown through hardware
 echo '#!/bin/bash
 
+#   This program is free software: you can redistribute it and/or modify
+#   it under the terms of the GNU General Public License as published by
+#   the Free Software Foundation, either version 3 of the License, or
+#   (at your option) any later version.
+#
+#   This program is distributed in the hope that it will be useful,
+#   but WITHOUT ANY WARRANTY; without even the implied warranty of
+#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#   GNU General Public License for more details.
+#
+#   You should have received a copy of the GNU General Public License
+#   along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+#   Copyright 2020 geekworm-com
+#   Copyright 2021 Daniele Basile
+#   Copyright 2022 Federico Pietro Briata
+
 BATCHECK=1  # Var defined to keep system up if battery level is above 25%, leave this var not defined to shutdown on power loss asap
 
 # Raspberry Pi GPIO (not tested yet with this script)
