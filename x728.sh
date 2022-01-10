@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# This is the installer, running it will generate 2 bash script and 1 service file.
+
 sudo apt-get install i2c-tools ntpdate
 
 #X728 RTC setting up
@@ -10,13 +12,14 @@ sudo sed -i '$ i hwclock -s' /etc/rc.local
 
 #x728 Powering on /reboot /full shutdown through hardware
 echo '#!/bin/bash
-BATCHECK=1  # Var defined to keep system up if battery level is above 25%, var not defined to shutdown on power loss asap
 
-# Raspberry Pi GPIO
+BATCHECK=1  # Var defined to keep system up if battery level is above 25%, leave this var not defined to shutdown on power loss asap
+
+# Raspberry Pi GPIO (not tested yet with this script)
 PLD=6		# PIN 31 IN for AC power loss detection (When PLD Jumper is inserted: High=power loss | Low=Power supply normal)
 SHUTDOWN=5	# PIN 29 IN for power management. aka shutdown pin (the physical button on x728)
 BOOT=12		# PIN 32 OUT for power management, to signal the SBC as running. aka boot pin
-LATCH=13	# PIN 33 OUT for power OFF, to signal we are shutting down. aka button pin. Note that this PIN has been changed on recent x728 revision, so PIN37 is GPIO 26 for x728 v2.0 and above, and PIN33 is GPIO 13 for X728 v1.2/v1.3
+LATCH=13	# PIN 33 OUT for power OFF, to signal we are shutting down. aka button pin. Note that this PIN has been changed on recent x728 revision, so PIN33/GPIO13 present on X728 v1.2/v1.3 become PIN37/GPIO26 on x728 v2.0 and above.
 I2CBUS=1	# 0 = /dev/i2c-0 (port I2C0), 1 = /dev/i2c-1 (port I2C1)
 
 # Odroid C2 GPIO (with cat /sys/kernel/debug/gpio on armbian buster kernel v4.19 I found mine)
@@ -111,7 +114,7 @@ while [ 1 ]; do
 		while [ $retval -eq 1 ]; do
 			/bin/sleep 0.02
 			if [ $(($(date +%s%N | cut -b1-13)-$pulseStart)) -gt $REBOOTPULSEMAXIMUM ]; then
-				echo "X728 Shutting down", SHUTDOWN, ", halting the system ..."
+				echo "X728 Shutting down", SHUTDOWN, ", powering OFF the system ..."
 				/sbin/shutdown now
 				exit 0
 			fi
@@ -131,7 +134,7 @@ sudo chmod +x /usr/local/bin/x728pwr.sh
 
 #X728 shutdown systemd service file
 echo '[Unit]
-Description=Start x728 power management
+Description=x728 power management service
 Requires=local-fs.target
 
 [Service]
@@ -149,6 +152,9 @@ sudo systemctl enable x728pwr
 
 #X728 full shutdown through Software
 echo '#!/bin/bash
+# This script will be executed during shutdown (reboot/poweroff) chain.
+# Do not execute this manually to avoid file corruption.
+# More info: https://www.freedesktop.org/software/systemd/man/systemd-halt.service.html
 
 /usr/local/bin/x728pwr.sh $1' > /lib/systemd/system-shutdown/x728softsd.sh
 sudo chmod +x /lib/systemd/system-shutdown/x728softsd.sh
